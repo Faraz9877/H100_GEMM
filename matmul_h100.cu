@@ -13,11 +13,6 @@ static constexpr int BLOCKN = 128;
 static constexpr int BLOCKK = 64;
 static constexpr int STAGES = 7;
 
-/// RUN:
-/// nvcc -arch=sm_90a -lcuda -std=c++17
-/// matmul_h100.cu -o test && ./test
-/// |& tee trace.log
-
 #include "header.cuh"
 
 template <int Stages>
@@ -289,44 +284,6 @@ struct EpilgoueLoadPipelineParams {
   uint32_t dst_blockid = block_rank_in_cluster();
 };
 
-// This seems not necessary in this example, so I didn't finish it.
-template <int Stages>
-struct EpilogueLoadPipeline {
-  Barrier* full_barrier_ptr = nullptr;
-  Barrier* empty_barrier_ptr = nullptr;
-  EpilgoueLoadPipelineParams<Stages> params;
-
-  DEVICE EpilogueLoadPipeline(
-      EpilogueLoadPipelineSharedStorage<Stages>& storage,
-      EpilgoueLoadPipelineParams<Stages>& params)
-      : full_barrier_ptr(&storage.full_barrier[0]),
-        empty_barrier_ptr(&storage.empty_barrier[0]),
-        params(params) {
-    int warp_idx = threadIdx.x / WARP_SIZE;
-    int lane_predicate = elect_one_sync();
-
-    if (warp_idx == 0 && lane_predicate == 1) {
-      for (int i = 0; i < Stages; ++i) {
-        full_barrier_ptr[i].init(params.producer_arv_count);
-        empty_barrier_ptr[i].init(params.consumer_arv_count);
-      }
-    }
-    utils::fence_barrier_init();
-  }
-
-  DEVICE void producer_acquire(PipelineState<Stages> state,
-                               ProducerToken barrier_token = {
-                                   BarrierStatus::WaitAgain}) {
-    if (barrier_token == BarrierStatus::WaitAgain) {
-      empty_barrier_ptr[state.index].wait(state.phase);
-    }
-  }
-
-  DEVICE void producer_expect_transaction(PipelineState<Stages> state) {
-    full_barrier_ptr[state.index].expect_transaction(params.transaction_bytes);
-  }
-};
-
 template <typename AType, typename BType, typename AccumType, int MTile,
           int NTile, int KTile>
 struct WgMMA;
@@ -432,7 +389,7 @@ struct WgMMA<half_t, half_t, float, MTile, NTile, KTile> {
   }
 };
 
-// A simpilified tile scheduler that always takes AlongN and non swizzle
+// A simplified tile scheduler that always takes AlongN and non swizzle
 template <int BlockM, int BlockN, int ClusterM, int ClusterN>
 struct TileScheduler {
   int linear_idx;
@@ -803,8 +760,6 @@ __global__ __launch_bounds__(384) void gpu_gemm_kernel(
           raw_shared_mem);
 
   // get useful ids:
-  // int thread_idx = threadIdx.x;
-  // int lane_idx = threadIdx.x % WARP_SIZE;
   int warp_idx = threadIdx.x / WARP_SIZE;
   int warp_idx_in_warp_group =
       threadIdx.x / WARP_SIZE % WARP_NUMBER_IN_WARP_GROUP;
@@ -974,15 +929,11 @@ __global__ __launch_bounds__(384) void gpu_gemm_kernel(
 }
 
 template <class AType, class BType, class CType, class AccumType>
-void gpu_gemm(GemmParams<AType, BType, CType, AccumType> gemm_params,
-              bool verbose = true) {
+void gpu_gemm(GemmParams<AType, BType, CType, AccumType> gemm_params) {
   int sm_number = get_sm_count();
   dim3 grid(CLUSTER_M * CLUSTER_N, sm_number / (CLUSTER_M * CLUSTER_N), 1);
   dim3 block(WARP_GROUP_SIZE * WG_NUMBER, 1, 1);
   dim3 cluster(CLUSTER_M, CLUSTER_N, 1);
-  if (verbose) {
-    std::cout << "sm_number: " << sm_number << "\n";
-  }
   auto* Kernel = gpu_gemm_kernel<AType, BType, CType, AccumType, BLOCKM, BLOCKN,
                                  BLOCKK, CLUSTER_M, CLUSTER_N, STAGES>;
   size_t smemSizeBytes =
@@ -992,13 +943,6 @@ void gpu_gemm(GemmParams<AType, BType, CType, AccumType> gemm_params,
     cudaError_t result = cudaFuncSetAttribute(
         Kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smemSizeBytes);
     CUDA_CHECK(result);
-  }
-  if (verbose) {
-    std::cout << "Launching kernel with grid " << grid.x << " " << grid.y << " "
-              << grid.z << " and block " << block.x << " " << block.y << " "
-              << block.z << " and cluster " << cluster.x << " " << cluster.y
-              << " " << cluster.z << " and smem " << smemSizeBytes
-              << " bytes\n";
   }
   void const* kernel = (void const*)Kernel;
 
@@ -1065,7 +1009,7 @@ int main(int argc, char** argv) {
       }
     }
   }
-  std::cout << "Testing shape M=" << M << ", N=" << N << ", K=" << K << "\n";
+  std::cout << "Shape M=" << M << ", N=" << N << ", K=" << K << "\n";
   using AType = half_t;
   using BType = half_t;
   using CType = half_t;
@@ -1078,13 +1022,10 @@ int main(int argc, char** argv) {
   std::vector<int> CShape = {M, N};
   auto hA = alloc_cpu_tensor<AType>(AShape);
   random_fill(hA, AShape);
-  // constant_fill(hA, AShape, (AType)1.0);
   auto hB = alloc_cpu_tensor<BType>(BShape);
   random_fill(hB, BShape);
-  // constant_fill(hB, BShape, (BType)1.0);
   auto hC = alloc_cpu_tensor<CType>(CShape);
   random_fill(hC, CShape);
-  // constant_fill(hC, CShape, (CType)(-13.0));
   auto goldenC = alloc_cpu_tensor<CType>(CShape);
   random_fill(goldenC, CShape);
   auto dA = alloc_gpu_tensor<AType>(AShape);
@@ -1092,67 +1033,43 @@ int main(int argc, char** argv) {
   auto dgC = alloc_gpu_tensor<CType>(CShape);
   auto dC = alloc_gpu_tensor<CType>(CShape);
 
-  /// timers
-  CPUTimer cpu_timer;
+  /// timer
   GPUTimer gpu_timer;
 
   /// copy data
-  std::cout << "Copying data from CPU to GPU...\n";
-  cpu_timer.tick();
   copy_to_gpu(hA, dA, AShape);
   copy_to_gpu(hB, dB, BShape);
   copy_to_gpu(hC, dC, CShape);
   copy_to_gpu(goldenC, dgC, CShape);
-  cpu_timer.tick();
-  std::cout << "Copy data done! Use " << cpu_timer.report_last_ms() << " ms.\n";
 
   /// compute gpu reference
-  std::cout << "Computing gpu reference values...\n";
   GemmParams gpu_params(M, N, K, dA, dB, dgC, alpha, beta);
-  gpu_timer.sync_all();
-  gpu_timer.tick();
   reference_gpu_gemm(gpu_params);
-  gpu_timer.tick();
-  gpu_timer.sync_all();
-  std::cout << "GPU reference done! Use " << gpu_timer.report_last_ms()
-            << " ms.\n";
 
   /// copy results
-  std::cout << "Copying results...\n";
   copy_to_cpu(goldenC, dgC, CShape);
-  std::cout << "Copying results done!\n";
 
   /// compute gpu kernel
-  std::cout << "Computing gpu kernel values...\n";
   GemmParams gpu_kernel_params(M, N, K, dA, dB, dC, alpha, beta);
   gpu_gemm(gpu_kernel_params);
-  std::cout << "GPU kernel done!\n";
 
   /// copy results
-
-  std::cout << "Copying results...\n";
   copy_to_cpu(hC, dC, CShape);
-  std::cout << "Copying results done!\n";
 
   /// compare results
   assert_allclose(hC, goldenC, CShape, /*rtol=*/1e-3, /*dump=*/false);
   std::cout << "Correct!\n";
 
   /// profile
-  std::cout << "Profile performance...\n";
   gpu_timer.sync_all();
   gpu_timer.tick();
   for (int i = 0; i < iters; ++i) {
-    gpu_gemm(gpu_params, /*verbose=*/false);
+    gpu_gemm(gpu_params);
   }
   gpu_timer.tick();
   gpu_timer.sync_all();
   float latency = gpu_timer.report_last_ms() / float(iters);
-  std::cout << "Profile done! Average latency (ms) is " << latency << "\n";
-  std::cout << "TFLOPS: "
-            << ((double)M * (double)N * (double)K * 2.0) / (latency / 1000.0) /
-                   1e12
-            << "\n";
+  std::cout << "Average latency (ms) is " << latency << "\n";
 
   free_cpu_tensor(hA);
   free_cpu_tensor(hB);
