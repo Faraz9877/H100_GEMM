@@ -1,4 +1,5 @@
 #include "common.h"
+#include "reference.h"
 
 const int testM = 4096;
 const int testN = 4096;
@@ -13,7 +14,7 @@ static constexpr int BLOCKK = 64;
 static constexpr int STAGES = 7;
 
 /// RUN:
-/// nvcc -arch=sm_90a -I ../../../include -lcuda -std=c++17
+/// nvcc -arch=sm_90a -lcuda -std=c++17
 /// matmul_h100.cu -o test && ./test
 /// |& tee trace.log
 
