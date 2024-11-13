@@ -18,9 +18,11 @@ ALL_LDFLAGS += $(ALL_CCFLAGS)
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(LDFLAGS))
 
 # Common includes and paths for CUDA
-INCLUDES  := -I$(CUDA_PATH)/include/
+INCLUDES  := -I$(CUDA_PATH)/include/ 
 LIBRARIES := -lcublas 
 LIBRARIES += -L${CUDA_PATH}/lib64
+
+INCLUDES  += -I/home/ferrar/cutlass/include -I/home/ferrar/cutlass/tools/util/include
 
 ################################################################################
 
@@ -35,14 +37,14 @@ ALL_CCFLAGS += --use_fast_math
 ALL_CCFLAGS += --ptxas-options=-v,-warn-lmem-usage,--warn-on-spills
 ################################################################################
 # Target rules
-all: spmm_test
+all: hopper_warp_specialized_gemm
 
 
-spmm_test.o:  spmm_test.cu spmm_test_utils.h
+hopper_warp_specialized_gemm.o: 48_hopper_warp_specialized_gemm.cu helper.h
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
-spmm_test: spmm_test.o
+hopper_warp_specialized_gemm: hopper_warp_specialized_gemm.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES) 
 
 clean:
-	rm -f spmm_test spmm_test.o
+	rm -f hopper_warp_specialized_gemm hopper_warp_specialized_gemm.o

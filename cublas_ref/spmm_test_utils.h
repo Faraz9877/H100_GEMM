@@ -136,54 +136,6 @@ init_host_matrices(half* a, half* b, int M_GLOBAL, int K_GLOBAL, int N_GLOBAL, i
     }
 }
 
-__global__ void compressBMatrix(half* B_Trans_Comp, half* B_Transposed, int N_GLOBAL)
-{
-    constexpr int HALF_PER_128B = 8, ELEMENT_PER_THREADBLOCK = 256;
-
-    int row_per_block = blockDim.x / (N_GLOBAL / HALF_PER_128B);
-
-    half* Compressed_BasePTR_ThisBlock = B_Trans_Comp + blockIdx.x * row_per_block * N_GLOBAL;
-    half* BasePTR_ThisBlock = B_Transposed + blockIdx.x * row_per_block * N_GLOBAL * 2;
-    //
-
-    int col = threadIdx.x % (N_GLOBAL / HALF_PER_128B);
-    int compressed_row = threadIdx.x / (N_GLOBAL / HALF_PER_128B);
-    int decompressed_row = compressed_row * 2 + (2 - (compressed_row % 2));
-
-    reinterpret_cast<float4*>(&Compressed_BasePTR_ThisBlock[compressed_row * N_GLOBAL + col * HALF_PER_128B])[0] =
-        __ldg(reinterpret_cast<float4*>(&BasePTR_ThisBlock[decompressed_row * N_GLOBAL + col * HALF_PER_128B]));
-}
-
-__global__ void compressBMatrixInPlace(half* B_Transposed, int N_GLOBAL)
-{
-    constexpr int HALF_PER_128B = 8, ELEMENT_PER_THREADBLOCK = 256;
-
-    int row_per_block = blockDim.x / (N_GLOBAL / HALF_PER_128B);
-
-    half* BasePTR_ThisBlock = B_Transposed + blockIdx.x * row_per_block * N_GLOBAL * 2;
-    //
-
-    int col = threadIdx.x % (N_GLOBAL / HALF_PER_128B);
-    int compressed_row = threadIdx.x / (N_GLOBAL / HALF_PER_128B);
-    int decompressed_row = compressed_row * 2 + (2 - (compressed_row % 2));
-
-    reinterpret_cast<float4*>(&BasePTR_ThisBlock[compressed_row * N_GLOBAL + col * HALF_PER_128B])[0] =
-        __ldg(reinterpret_cast<float4*>(&BasePTR_ThisBlock[decompressed_row * N_GLOBAL + col * HALF_PER_128B]));
-}
-
-__global__ void printC(half* C, int M, int N) {
-    if (threadIdx.x == 0) {
-        printf("C: \n");
-        for(int i = 0; i < M; i++)
-        {
-            for(int j = 0; j < N; j++)
-            {
-                printf("%f ", __half2float(C[i + j * M]));
-            }
-            printf("\n");
-        }
-    }
-}
 
 __host__ void init_host_structure_sparsity(
     half* a, half* b, int M_GLOBAL, int K_GLOBAL, int N_GLOBAL, int MATRIX_A_PRUNING_PERCENTAGE)

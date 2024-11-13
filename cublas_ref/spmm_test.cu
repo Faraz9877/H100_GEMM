@@ -18,14 +18,14 @@
 
 int main(int argc, char** argv)
 {
-    if (argc != 5) {
-        printf("Wrong Inputs! Correct input format: ./spmm_test M K N Sparsity\n");
-        return;
+    if (argc != 4 && argc != 5) {
+        printf("Wrong Inputs! Correct input format: ./spmm_test M K N [Sparsity]\n");
+        return 0;
     }
     int M_GLOBAL                    = atoi(argv[1]);
     int K_GLOBAL                    = atoi(argv[2]);
     int N_GLOBAL                    = atoi(argv[3]);
-    int MATRIX_A_PRUNING_PERCENTAGE = atoi(argv[4]);
+    int MATRIX_A_PRUNING_PERCENTAGE = (argc == 5) ? atoi(argv[4]) : 0;
 
     cublasStatus_t cublas_status;
     cudaEvent_t start, stop;
