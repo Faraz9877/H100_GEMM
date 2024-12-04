@@ -5,13 +5,7 @@ const int testM = 4096;
 const int testN = 4096;
 const int testK = 4096;
 const int iters = 200;
-static constexpr int CLUSTER_M = 2;
-static constexpr int CLUSTER_N = 1;
 static constexpr int WG_NUMBER = 3;
-static constexpr int BLOCKM = 128;
-static constexpr int BLOCKN = 128;
-static constexpr int BLOCKK = 64;
-static constexpr int STAGES = 7;
 
 #include "header.cuh"
 
@@ -857,7 +851,7 @@ __global__ __launch_bounds__(384) void gpu_gemm_kernel(
 
   if (warp_group_role == WarpGroupRole::Producer) {
     // you can't only dealloc without alloc in consumer!
-    // Don't know why the magic number 40
+    // Handtune the magic number 40
     utils::warpgroup_reg_dealloc<40>();
 
     if (producer_warp_role == ProducerWarpRole::Mainloop) {
@@ -880,16 +874,12 @@ __global__ __launch_bounds__(384) void gpu_gemm_kernel(
       }
 
       mainloop.load_tail(mainloop_pipeline, mainloop_pipeline_producer_state);
-    } else if (producer_warp_role == ProducerWarpRole::Epilogue && false) {
-      // no need to do epilogue load, so in this example the epilogue producer
-      // is empty
-      load_order.wait();
     }
 
   } else if (warp_group_role == WarpGroupRole::Consumer0 ||
              warp_group_role == WarpGroupRole::Consumer1) {
     // you can't only alloc without dealloc in producer!
-    // Don't know why the magic number 232
+    // Handtune the magic number 232
     utils::warpgroup_reg_alloc<232>();
 
     while (work_tile_info.valid) {
@@ -928,7 +918,7 @@ __global__ __launch_bounds__(384) void gpu_gemm_kernel(
   }
 }
 
-template <class AType, class BType, class CType, class AccumType>
+template <class AType, class BType, class CType, class AccumType, int CLUSTER_M, int CLUSTER_N, int BLOCKM, int BLOCKN, int BLOCKK, int STAGES>
 void gpu_gemm(GemmParams<AType, BType, CType, AccumType> gemm_params) {
   int sm_number = get_sm_count();
   dim3 grid(CLUSTER_M * CLUSTER_N, sm_number / (CLUSTER_M * CLUSTER_N), 1);
@@ -1007,6 +997,7 @@ int main(int argc, char** argv) {
       else if (keys == "K") {
         K = std::atoi(value);
       }
+      
     }
   }
   std::cout << "Shape M=" << M << ", N=" << N << ", K=" << K << "\n";
@@ -1049,9 +1040,16 @@ int main(int argc, char** argv) {
   /// copy results
   copy_to_cpu(goldenC, dgC, CShape);
 
+  static constexpr int CLUSTER_M = 2;
+  static constexpr int CLUSTER_N = 1;
+  static constexpr int BLOCKM = 128;
+  static constexpr int BLOCKN = 128;
+  static constexpr int BLOCKK = 64;
+  static constexpr int STAGES = 7;
+
   /// compute gpu kernel
   GemmParams gpu_kernel_params(M, N, K, dA, dB, dC, alpha, beta);
-  gpu_gemm(gpu_kernel_params);
+  gpu_gemm<half_t, half_t, half_t, float, CLUSTER_M, CLUSTER_N, BLOCKM, BLOCKN, BLOCKK, STAGES>(gpu_kernel_params);
 
   /// copy results
   copy_to_cpu(hC, dC, CShape);
@@ -1064,7 +1062,7 @@ int main(int argc, char** argv) {
   gpu_timer.sync_all();
   gpu_timer.tick();
   for (int i = 0; i < iters; ++i) {
-    gpu_gemm(gpu_params);
+    gpu_gemm<half_t, half_t, half_t, float, CLUSTER_M, CLUSTER_N, BLOCKM, BLOCKN, BLOCKK, STAGES>(gpu_params);
   }
   gpu_timer.tick();
   gpu_timer.sync_all();
