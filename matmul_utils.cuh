@@ -564,32 +564,3 @@ __global__  __launch_bounds__(NUM_THREADS) void  __cluster_dims__(CLUSTER_M * CL
         }
     }
 }
-
-void runKernel(int M, int N, int K, bf16 *A, bf16 *B, bf16 *C, int *DB) {
-    constexpr int BM = 64*2;
-    constexpr int BN = 256;
-    constexpr int BK = 64;
-    constexpr int NUM_THREADS = 128*3;
-    constexpr int QSIZE = 3;
-    constexpr int CLUSTER_M = 2;
-    constexpr int CLUSTER_N = 1;
-    constexpr int NUM_SM = 128;
-    static_assert(NUM_SM % (CLUSTER_M*CLUSTER_N) == 0);
-
-    if (_prev_m != M) {
-        d_tma_map_A = create_tensor_map<BM, BK>(A, M, K);
-        d_tma_map_B = create_tensor_map<BN, BK>(B, N, K);
-        _prev_m = M;
-        _prev_n = N;
-        _prev_k = K;
-    }
-    // Assert cached values are of same size
-    assert (M == _prev_m && N == _prev_n && K == _prev_k);
-    auto* kernel = matmulKernel<BM, BN, BK, NUM_THREADS, QSIZE, NUM_SM, CLUSTER_M, CLUSTER_N>;
-    size_t sMemSize = sizeof(SMem<BM, BN, BK, QSIZE>);
-    cudaCheck(cudaFuncSetAttribute(
-        kernel,
-        cudaFuncAttributeMaxDynamicSharedMemorySize, sMemSize));
-
-    kernel<<<NUM_SM, NUM_THREADS, sMemSize>>>(M, N, K, C, d_tma_map_A, d_tma_map_B);
-}
